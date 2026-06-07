@@ -59,21 +59,21 @@ def strip_ansi(text: str) -> str:
 def run_opencode_command(args: List[str], work_dir: Optional[str] = None) -> tuple:
     """
     执行 opencode 命令
-    
+
     Returns:
         (stdout, stderr, returncode)
     """
     cmd = ['powershell', '-Command']
-    
+
     ps_command = '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; '
-    
+
     if work_dir:
         ps_command += f'Set-Location -LiteralPath "{work_dir}"; '
-    
+
     ps_command += 'opencode ' + ' '.join(args)
-    
+
     cmd.append(ps_command)
-    
+
     try:
         result = subprocess.run(
             cmd,
@@ -81,10 +81,10 @@ def run_opencode_command(args: List[str], work_dir: Optional[str] = None) -> tup
             text=False,
             timeout=120
         )
-        
+
         stdout = result.stdout.decode('utf-8', errors='replace')
         stderr = result.stderr.decode('utf-8', errors='replace')
-        
+
         return stdout, stderr, result.returncode
     except subprocess.TimeoutExpired:
         return "", "命令执行超时", -1
@@ -92,21 +92,28 @@ def run_opencode_command(args: List[str], work_dir: Optional[str] = None) -> tup
         return "", str(e), -1
 
 
+def _get_data_dir() -> str:
+    """获取数据存储目录"""
+    data_dir = os.path.join(os.path.expanduser("~"), ".openremote")
+    os.makedirs(data_dir, exist_ok=True)
+    return data_dir
+
+
 # ============== Session Manager ==============
 
 class SessionManager:
     """会话管理器"""
-    
+
     def __init__(self):
         self.sessions: Dict[str, Dict] = {}
-        self.history_dir = os.path.join(os.path.dirname(__file__), 'sessions')
+        self.history_dir = os.path.join(_get_data_dir(), 'sessions')
         os.makedirs(self.history_dir, exist_ok=True)
-    
+
     def create_session(self, work_dir: Optional[str] = None) -> str:
         """创建新会话"""
         session_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
-        
+
         session = {
             'session_id': session_id,
             'work_dir': work_dir or os.getcwd(),
@@ -115,17 +122,17 @@ class SessionManager:
             'created_at': now,
             'updated_at': now
         }
-        
+
         self.sessions[session_id] = session
         self._save_session(session_id)
-        
+
         return session_id
-    
+
     def get_session(self, session_id: str) -> Optional[Dict]:
         """获取会话"""
         if session_id in self.sessions:
             return self.sessions[session_id]
-        
+
         # 尝试从文件加载
         session_file = os.path.join(self.history_dir, f"{session_id}.json")
         if os.path.exists(session_file):
@@ -136,65 +143,65 @@ class SessionManager:
                 return session
             except:
                 return None
-        
+
         return None
-    
+
     def update_session(self, session_id: str, updates: Dict) -> bool:
         """更新会话"""
         session = self.get_session(session_id)
         if not session:
             return False
-        
+
         session.update(updates)
         session['updated_at'] = datetime.now().isoformat()
         self._save_session(session_id)
         return True
-    
+
     def add_message(self, session_id: str, role: str, content: str) -> bool:
         """添加消息到历史记录"""
         session = self.get_session(session_id)
         if not session:
             return False
-        
+
         message = {
             'role': role,
             'content': content,
             'timestamp': datetime.now().isoformat(),
             'work_dir': session.get('work_dir')
         }
-        
+
         session['history'].append(message)
         session['updated_at'] = datetime.now().isoformat()
-        
+
         # 限制历史记录长度（保留最近 50 条）
         if len(session['history']) > 50:
             session['history'] = session['history'][-50:]
-        
+
         self._save_session(session_id)
         return True
-    
+
     def clear_history(self, session_id: str) -> bool:
         """清空历史记录"""
         session = self.get_session(session_id)
         if not session:
             return False
-        
+
         session['history'] = []
         session['updated_at'] = datetime.now().isoformat()
         self._save_session(session_id)
         return True
-    
+
     def delete_session(self, session_id: str) -> bool:
         """删除会话"""
         if session_id in self.sessions:
             del self.sessions[session_id]
-        
+
         session_file = os.path.join(self.history_dir, f"{session_id}.json")
         if os.path.exists(session_file):
             os.remove(session_file)
             return True
         return False
-    
+
     def list_sessions(self) -> List[Dict]:
         """列出所有会话"""
         sessions = []
@@ -212,7 +219,7 @@ class SessionManager:
                         'updated_at': session['updated_at']
                     })
         return sessions
-    
+
     def _save_session(self, session_id: str):
         """保存会话到文件"""
         session = self.sessions.get(session_id)
@@ -338,7 +345,7 @@ async def get_version():
 async def list_models():
     """
     查询当前 opencode 可用的模型列表
-    
+
     Returns:
         {
             "models": [
@@ -348,10 +355,10 @@ async def list_models():
         }
     """
     stdout, stderr, returncode = run_opencode_command(['models'])
-    
+
     if returncode != 0:
         raise HTTPException(status_code=500, detail=f"获取模型列表失败: {stderr}")
-    
+
     models = []
     for line in stdout.strip().split('\n'):
         line = line.strip()
@@ -360,7 +367,7 @@ async def list_models():
                 "id": line,
                 "name": line
             })
-    
+
     return {
         "models": models,
         "count": len(models)
@@ -371,14 +378,14 @@ async def list_models():
 async def get_current_model(session_id: str):
     """
     获取当前会话使用的模型
-    
+
     Args:
         session_id: 会话ID
     """
     session = session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="会话不存在")
-    
+
     return {
         "session_id": session_id,
         "current_model": session.get('current_model'),
@@ -390,11 +397,11 @@ async def get_current_model(session_id: str):
 async def set_model(session_id: str, request: ModelRequest):
     """
     切换当前会话使用的模型
-    
+
     Args:
         session_id: 会话ID
         request: {"model": "provider/model"}
-    
+
     Returns:
         {
             "session_id": "xxx",
@@ -405,22 +412,22 @@ async def set_model(session_id: str, request: ModelRequest):
     session = session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="会话不存在")
-    
+
     # 验证模型是否可用
     stdout, stderr, returncode = run_opencode_command(['models'])
     if returncode != 0:
         raise HTTPException(status_code=500, detail=f"获取模型列表失败: {stderr}")
-    
+
     available_models = [line.strip() for line in stdout.strip().split('\n') if line.strip() and not line.strip().startswith('>')]
-    
+
     if request.model not in available_models:
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"模型 '{request.model}' 不可用。可用模型: {', '.join(available_models)}"
         )
-    
+
     session_manager.update_session(session_id, {'current_model': request.model})
-    
+
     return {
         "session_id": session_id,
         "model": request.model,
@@ -434,14 +441,14 @@ async def set_model(session_id: str, request: ModelRequest):
 async def get_workdir(session_id: str):
     """
     获取当前会话的工作目录
-    
+
     Args:
         session_id: 会话ID
     """
     session = session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="会话不存在")
-    
+
     return {
         "session_id": session_id,
         "work_dir": session['work_dir']
@@ -452,11 +459,11 @@ async def get_workdir(session_id: str):
 async def set_workdir(session_id: str, request: WorkDirRequest):
     """
     设置工作目录
-    
+
     Args:
         session_id: 会话ID
         request: {"path": "C:\\Users\\xxx\\Desktop"}
-    
+
     Returns:
         {
             "session_id": "xxx",
@@ -467,17 +474,17 @@ async def set_workdir(session_id: str, request: WorkDirRequest):
     session = session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="会话不存在")
-    
+
     # 验证目录是否存在
     if not os.path.exists(request.path):
         raise HTTPException(status_code=400, detail=f"目录不存在: {request.path}")
-    
+
     if not os.path.isdir(request.path):
         raise HTTPException(status_code=400, detail=f"路径不是目录: {request.path}")
-    
+
     abs_path = os.path.abspath(request.path)
     session_manager.update_session(session_id, {'work_dir': abs_path})
-    
+
     return {
         "session_id": session_id,
         "work_dir": abs_path,
@@ -491,10 +498,10 @@ async def set_workdir(session_id: str, request: WorkDirRequest):
 async def create_session(work_dir: Optional[str] = None):
     """
     创建新会话
-    
+
     Args:
         work_dir: 可选，工作目录路径
-    
+
     Returns:
         {
             "session_id": "xxx",
@@ -504,10 +511,10 @@ async def create_session(work_dir: Optional[str] = None):
     """
     if work_dir and not os.path.exists(work_dir):
         raise HTTPException(status_code=400, detail=f"目录不存在: {work_dir}")
-    
+
     session_id = session_manager.create_session(work_dir)
     session = session_manager.get_session(session_id)
-    
+
     return {
         "session_id": session_id,
         "work_dir": session['work_dir'],
@@ -519,7 +526,7 @@ async def create_session(work_dir: Optional[str] = None):
 async def list_sessions():
     """
     列出所有会话
-    
+
     Returns:
         {
             "sessions": [
@@ -543,14 +550,14 @@ async def list_sessions():
 async def get_session(session_id: str):
     """
     获取会话详情
-    
+
     Args:
         session_id: 会话ID
     """
     session = session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="会话不存在")
-    
+
     return {
         "session_id": session['session_id'],
         "work_dir": session['work_dir'],
@@ -565,13 +572,13 @@ async def get_session(session_id: str):
 async def delete_session(session_id: str):
     """
     删除会话
-    
+
     Args:
         session_id: 会话ID
     """
     if not session_manager.delete_session(session_id):
         raise HTTPException(status_code=404, detail="会话不存在")
-    
+
     return {"message": "会话已删除"}
 
 
@@ -581,14 +588,14 @@ async def delete_session(session_id: str):
 async def get_history(session_id: str):
     """
     获取会话历史记录
-    
+
     Args:
         session_id: 会话ID
     """
     session = session_manager.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="会话不存在")
-    
+
     return {
         "session_id": session_id,
         "history": session['history'],
@@ -600,13 +607,13 @@ async def get_history(session_id: str):
 async def clear_history(session_id: str):
     """
     清空会话历史记录
-    
+
     Args:
         session_id: 会话ID
     """
     if not session_manager.clear_history(session_id):
         raise HTTPException(status_code=404, detail="会话不存在")
-    
+
     return {"message": "历史记录已清空"}
 
 
@@ -616,10 +623,10 @@ def build_context(history: List[Dict], user_message: str, max_history: int = 10)
     """构建带上下文的完整消息"""
     if not history:
         return user_message
-    
+
     # 只保留最近的消息
     recent_history = history[-max_history:]
-    
+
     context = "以下是之前的对话历史：\n\n"
     for msg in recent_history:
         role = msg['role']
@@ -628,10 +635,10 @@ def build_context(history: List[Dict], user_message: str, max_history: int = 10)
             context += f"用户: {content}\n"
         elif role == 'assistant':
             context += f"助手: {content}\n"
-    
+
     context += f"\n用户的新问题: {user_message}\n"
     context += "\n请根据以上对话历史回答用户的新问题。"
-    
+
     return context
 
 
@@ -777,14 +784,14 @@ async def chat_stream_generator(session_id: str, message: str) -> AsyncGenerator
 async def chat(request: ChatRequest):
     """
     对话接口（非流式）
-    
+
     Args:
         request: {
             "message": "你好",
             "stream": false,
             "session_id": "可选，不传则创建新会话"
         }
-    
+
     Returns:
         {
             "session_id": "xxx",
@@ -801,14 +808,14 @@ async def chat(request: ChatRequest):
     else:
         session_id = session_manager.create_session()
         session = session_manager.get_session(session_id)
-    
+
     work_dir = session['work_dir']
     current_model = session.get('current_model')
     history = session['history']
-    
+
     # 构建上下文消息
     full_message = build_context(history, request.message)
-    
+
     # 构建命令
     model_arg = f'--model {current_model}' if current_model else ''
     ps_command = (
@@ -816,7 +823,7 @@ async def chat(request: ChatRequest):
         f'Set-Location -LiteralPath "{work_dir}"; '
         f'opencode run "{full_message}" --format default --no-replay {model_arg}'
     )
-    
+
     try:
         result = subprocess.run(
             ['powershell', '-Command', ps_command],
@@ -824,14 +831,14 @@ async def chat(request: ChatRequest):
             text=False,
             timeout=120
         )
-        
+
         if result.returncode != 0:
             stderr = result.stderr.decode('utf-8', errors='replace')
             raise HTTPException(status_code=500, detail=f"对话失败: {stderr}")
-        
+
         output = result.stdout.decode('utf-8', errors='replace')
         output = strip_ansi(output).strip()
-        
+
         # 清理输出
         lines = output.split('\n')
         cleaned_lines = []
@@ -839,20 +846,20 @@ async def chat(request: ChatRequest):
             line = line.strip()
             if line and not line.startswith('>') and not line.startswith('build'):
                 cleaned_lines.append(line)
-        
+
         response_text = '\n'.join(cleaned_lines)
-        
+
         # 保存到历史记录
         session_manager.add_message(session_id, 'user', request.message)
         session_manager.add_message(session_id, 'assistant', response_text)
-        
+
         return {
             "session_id": session_id,
             "response": response_text,
             "model": current_model,
             "message_count": len(session_manager.get_session(session_id)['history'])
         }
-        
+
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=504, detail="请求超时")
     except Exception as e:
@@ -863,13 +870,13 @@ async def chat(request: ChatRequest):
 async def chat_stream(request: ChatRequest):
     """
     对话接口（SSE 流式输出）
-    
+
     Args:
         request: {
             "message": "你好",
             "session_id": "可选，不传则创建新会话"
         }
-    
+
     Returns:
         SSE 流式事件:
         data: {"type": "text", "content": "你好", "session_id": "xxx"}
@@ -884,7 +891,7 @@ async def chat_stream(request: ChatRequest):
         session_id = request.session_id
     else:
         session_id = session_manager.create_session()
-    
+
     return StreamingResponse(
         chat_stream_generator(session_id, request.message),
         media_type="text/event-stream",
@@ -894,10 +901,3 @@ async def chat_stream(request: ChatRequest):
             "X-Session-ID": session_id
         }
     )
-
-
-# ============== Main ==============
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
