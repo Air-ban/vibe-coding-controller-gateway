@@ -10,6 +10,7 @@ import re
 import asyncio
 import uuid
 import socket
+import shutil
 from datetime import datetime
 from typing import Optional, List, Dict, Any, AsyncGenerator
 from contextlib import asynccontextmanager
@@ -642,6 +643,313 @@ def build_context(history: List[Dict], user_message: str, max_history: int = 10)
     return context
 
 
+def _as_dict(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _iter_dicts(value: Any):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _iter_dicts(child)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _iter_dicts(item)
+
+
+def _first_value(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _get_event_part(event: Dict[str, Any]) -> Dict[str, Any]:
+    containers = [
+        event,
+        _as_dict(event.get("data")),
+        _as_dict(event.get("properties")),
+        _as_dict(event.get("message")),
+    ]
+    for container in containers:
+        part = container.get("part")
+        if isinstance(part, dict):
+            return part
+        for key in ("parts", "content"):
+            items = container.get(key)
+            if isinstance(items, list):
+                for item in items:
+                    if isinstance(item, dict):
+                        return item
+        delta = container.get("delta")
+        if isinstance(delta, dict):
+            part = delta.get("part")
+            if isinstance(part, dict):
+                return part
+            if str(delta.get("type", "")).lower() in ("text", "reasoning"):
+                return delta
+    return {}
+
+
+def _extract_event_text(event: Dict[str, Any], part: Dict[str, Any]) -> tuple[Optional[str], str]:
+    raw_type = str(event.get("type", "")).lower().replace(".", "_").replace("-", "_")
+    part_type = str(part.get("type", "")).lower().replace(".", "_").replace("-", "_")
+    text_type = part_type if part_type in ("text", "reasoning") else raw_type
+
+    if text_type not in ("text", "reasoning"):
+        if "reasoning" in raw_type or "reasoning" in part_type:
+            text_type = "reasoning"
+        elif "text" in raw_type or "content" in raw_type or "message" in raw_type:
+            text_type = "text"
+        elif any(
+            isinstance(candidate.get(key), str)
+            for candidate in (part, event, _as_dict(event.get("data")), _as_dict(event.get("message")))
+            for key in ("delta", "text", "content")
+        ):
+            text_type = "text"
+        else:
+            for candidate in _iter_dicts(event):
+                candidate_type = str(candidate.get("type", "")).lower()
+                if candidate_type in ("text", "reasoning"):
+                    text_type = candidate_type
+                    break
+
+    if text_type not in ("text", "reasoning"):
+        return None, ""
+
+    text = _first_value(
+        part.get("delta"),
+        event.get("delta"),
+        part.get("text"),
+        event.get("text"),
+        part.get("content"),
+        event.get("content"),
+        part.get("response"),
+        event.get("response"),
+        part.get("output"),
+        event.get("output"),
+        part.get("result"),
+        event.get("result"),
+    )
+    if isinstance(text, str):
+        return text_type, text
+
+    chunks: List[str] = []
+    for candidate in _iter_dicts(event):
+        candidate_type = str(candidate.get("type", "")).lower()
+        if candidate_type not in ("text", "reasoning") and not any(key in candidate for key in ("delta", "text", "content", "response", "output", "result")):
+            continue
+        value = _first_value(
+            candidate.get("delta"),
+            candidate.get("text"),
+            candidate.get("content"),
+            candidate.get("response"),
+            candidate.get("output"),
+            candidate.get("result"),
+        )
+        if isinstance(value, str):
+            chunks.append(value)
+
+    return text_type, "".join(chunks)
+
+
+def _normalize_tool_event(event: Dict[str, Any], part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    raw_type = str(event.get("type", "")).lower()
+    part_type = str(part.get("type", "")).lower()
+    data = _as_dict(event.get("data"))
+    state = _as_dict(_first_value(part.get("state"), event.get("state"), data.get("state")))
+    function = _as_dict(_first_value(part.get("function"), event.get("function"), data.get("function")))
+    has_tool_shape = (
+        "tool" in raw_type
+        or part_type == "tool"
+        or any(key in part for key in ("tool", "tool_name", "tool_call_id"))
+        or any(key in event for key in ("tool", "tool_name", "tool_call_id"))
+        or any(key in data for key in ("tool", "tool_name", "tool_call_id"))
+        or bool(function)
+    )
+
+    tool_name = _first_value(
+        part.get("tool"),
+        part.get("name"),
+        part.get("tool_name"),
+        function.get("name"),
+        event.get("tool"),
+        event.get("name"),
+        data.get("tool"),
+        data.get("name"),
+    )
+
+    if not has_tool_shape:
+        return None
+
+    return {
+        "event_type": event.get("type", "unknown"),
+        "tool": tool_name or "unknown",
+        "tool_call_id": _first_value(
+            part.get("tool_call_id"),
+            part.get("id"),
+            event.get("tool_call_id"),
+            event.get("id"),
+            data.get("tool_call_id"),
+            data.get("id"),
+        ),
+        "status": _first_value(
+            part.get("status"),
+            state.get("status"),
+            event.get("status"),
+            data.get("status"),
+        ),
+        "input": _first_value(
+            part.get("input"),
+            part.get("arguments"),
+            part.get("args"),
+            part.get("params"),
+            part.get("parameters"),
+            state.get("input"),
+            event.get("input"),
+            event.get("arguments"),
+            data.get("input"),
+            data.get("arguments"),
+        ),
+        "output": _first_value(
+            part.get("output"),
+            part.get("result"),
+            part.get("response"),
+            state.get("output"),
+            state.get("result"),
+            event.get("output"),
+            event.get("result"),
+            data.get("output"),
+            data.get("result"),
+        ),
+        "error": _first_value(
+            part.get("error"),
+            state.get("error"),
+            event.get("error"),
+            data.get("error"),
+        ),
+        "raw": event,
+    }
+
+
+def _format_tool_content(tool_event: Dict[str, Any]) -> str:
+    tool_name = tool_event.get("tool") or "unknown"
+    status = tool_event.get("status")
+
+    if tool_event.get("error") is not None:
+        return f"Tool {tool_name} failed"
+    if tool_event.get("output") is not None:
+        return f"Tool {tool_name} result"
+    if tool_event.get("input") is not None:
+        return f"Tool {tool_name} call"
+    if status:
+        return f"Tool {tool_name} {status}"
+    return f"Tool {tool_name}"
+
+
+def _parse_opencode_json_output(output: str) -> tuple[str, str, List[Dict[str, Any]], List[Dict[str, Any]]]:
+    response_parts: List[str] = []
+    reasoning_parts: List[str] = []
+    events: List[Dict[str, Any]] = []
+    tools: List[Dict[str, Any]] = []
+
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            line = strip_ansi(line).strip()
+            if line and not line.startswith('>') and not line.startswith('build'):
+                response_parts.append(f"{line}\n")
+            continue
+
+        if not isinstance(event, dict):
+            continue
+
+        events.append(event)
+        part = _get_event_part(event)
+
+        text_type, text = _extract_event_text(event, part)
+        if text:
+            if text_type == "reasoning":
+                reasoning_parts.append(text)
+            else:
+                response_parts.append(text)
+
+        tool_event = _normalize_tool_event(event, part)
+        if tool_event:
+            tools.append(tool_event)
+
+    return ''.join(response_parts).strip(), ''.join(reasoning_parts).strip(), events, tools
+
+
+def _resolve_opencode_executable() -> str:
+    candidates = [
+        os.environ.get('OPENCODE_BIN'),
+    ]
+
+    appdata = os.environ.get('APPDATA')
+    if appdata:
+        candidates.append(os.path.join(appdata, 'npm', 'node_modules', 'opencode-ai', 'bin', 'opencode.exe'))
+
+    candidates.extend([
+        shutil.which('opencode.exe'),
+        shutil.which('opencode.cmd'),
+        shutil.which('opencode'),
+    ])
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+
+    return 'opencode'
+
+
+def _build_opencode_run_args(message: str, current_model: Optional[str], output_format: str) -> List[str]:
+    args = [_resolve_opencode_executable(), 'run', message, '--format', output_format, '--no-replay']
+    if current_model:
+        args.extend(['--model', current_model])
+    return args
+
+
+def _parse_opencode_default_output(output: str) -> str:
+    output = strip_ansi(output).strip()
+    cleaned_lines = []
+    for line in output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith('>') or line.startswith('build'):
+            continue
+        cleaned_lines.append(line)
+    return '\n'.join(cleaned_lines).strip()
+
+
+def _run_opencode_capture(
+    message: str,
+    current_model: Optional[str],
+    work_dir: str,
+    output_format: str,
+    timeout: int = 120,
+) -> tuple[str, str, int]:
+    env = os.environ.copy()
+    env['PYTHONUNBUFFERED'] = '1'
+    result = subprocess.run(
+        _build_opencode_run_args(message, current_model, output_format),
+        cwd=work_dir,
+        capture_output=True,
+        text=False,
+        timeout=timeout,
+        env=env,
+    )
+    stdout = result.stdout.decode('utf-8', errors='replace')
+    stderr = result.stderr.decode('utf-8', errors='replace')
+    return stdout, stderr, result.returncode
+
+
 async def _stream_text(text: str, event_type: str, session_id: str) -> AsyncGenerator[str, None]:
     """将文本逐字符流式发送"""
     for char in text:
@@ -654,7 +962,7 @@ async def _stream_text(text: str, event_type: str, session_id: str) -> AsyncGene
         await asyncio.sleep(0.005)
 
 
-async def chat_stream_generator(session_id: str, message: str) -> AsyncGenerator[str, None]:
+async def chat_stream_generator_legacy(session_id: str, message: str) -> AsyncGenerator[str, None]:
     """
     SSE 流式生成器
 
@@ -685,6 +993,7 @@ async def chat_stream_generator(session_id: str, message: str) -> AsyncGenerator
     )
 
     full_response = []
+    tool_events = []
 
     try:
         # 设置 PYTHONUNBUFFERED 避免 stdout 缓冲
@@ -711,13 +1020,17 @@ async def chat_stream_generator(session_id: str, message: str) -> AsyncGenerator
                     continue
 
                 event = json.loads(line_str)
+                if not isinstance(event, dict):
+                    continue
+
+                part = _get_event_part(event)
+                text_type, text = _extract_event_text(event, part)
+                tool_event = _normalize_tool_event(event, part)
                 event_type = event.get('type', 'unknown')
-                part = event.get('part', {})
 
                 if event_type == 'text':
                     text = part.get('text', '')
                     full_response.append(text)
-                    # 逐字符流式发送
                     async for chunk in _stream_text(text, 'text', session_id):
                         yield chunk
 
@@ -780,6 +1093,150 @@ async def chat_stream_generator(session_id: str, message: str) -> AsyncGenerator
     yield "data: [DONE]\n\n"
 
 
+async def chat_stream_generator(session_id: str, message: str) -> AsyncGenerator[str, None]:
+    session = session_manager.get_session(session_id)
+    if not session:
+        yield f"data: {json.dumps({'type': 'error', 'content': '会话不存在'}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    work_dir = session['work_dir']
+    current_model = session.get('current_model')
+    full_message = build_context(session['history'], message)
+
+    full_response: List[str] = []
+    tool_events: List[Dict[str, Any]] = []
+
+    try:
+        env = os.environ.copy()
+        env['PYTHONUNBUFFERED'] = '1'
+        process = await asyncio.create_subprocess_exec(
+            *_build_opencode_run_args(full_message, current_model, 'json'),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=work_dir,
+            env=env
+        )
+
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+
+            line_str = line.decode('utf-8', errors='replace').strip()
+            if not line_str:
+                continue
+
+            try:
+                event = json.loads(line_str)
+            except json.JSONDecodeError:
+                clean_line = strip_ansi(line_str).strip()
+                if clean_line and not clean_line.startswith('>'):
+                    full_response.append(clean_line)
+                    async for chunk in _stream_text(clean_line, 'text', session_id):
+                        yield chunk
+                continue
+
+            if not isinstance(event, dict):
+                continue
+
+            part = _get_event_part(event)
+            text_type, text = _extract_event_text(event, part)
+            if text:
+                if text_type == 'text':
+                    full_response.append(text)
+                async for chunk in _stream_text(text, text_type or 'text', session_id):
+                    yield chunk
+
+            tool_event = _normalize_tool_event(event, part)
+            if tool_event:
+                tool_events.append(tool_event)
+                sse_event = {
+                    'type': 'tool',
+                    'content': _format_tool_content(tool_event),
+                    'tool': tool_event.get('tool'),
+                    'tool_call_id': tool_event.get('tool_call_id'),
+                    'status': tool_event.get('status'),
+                    'input': tool_event.get('input'),
+                    'output': tool_event.get('output'),
+                    'error': tool_event.get('error'),
+                    'event_type': tool_event.get('event_type'),
+                    'raw': tool_event.get('raw'),
+                    'session_id': session_id
+                }
+                yield f"data: {json.dumps(sse_event, ensure_ascii=False)}\n\n"
+
+        await process.wait()
+
+        if process.returncode != 0:
+            stderr = (await process.stderr.read()).decode('utf-8', errors='replace')
+            sse_event = {
+                'type': 'error',
+                'content': stderr,
+                'session_id': session_id
+            }
+            yield f"data: {json.dumps(sse_event, ensure_ascii=False)}\n\n"
+        else:
+            full_text = ''.join(full_response)
+            if not full_text.strip() and not tool_events:
+                fallback_output, fallback_stderr, fallback_code = _run_opencode_capture(
+                    full_message,
+                    current_model,
+                    work_dir,
+                    'default',
+                )
+                if fallback_code != 0:
+                    sse_event = {
+                        'type': 'error',
+                        'content': fallback_stderr or 'opencode produced no displayable response.',
+                        'session_id': session_id
+                    }
+                    yield f"data: {json.dumps(sse_event, ensure_ascii=False)}\n\n"
+                else:
+                    full_text = _parse_opencode_default_output(fallback_output)
+                    if not full_text.strip():
+                        sse_event = {
+                            'type': 'error',
+                            'content': 'opencode produced no displayable response.',
+                            'session_id': session_id
+                        }
+                        yield f"data: {json.dumps(sse_event, ensure_ascii=False)}\n\n"
+                    else:
+                        async for chunk in _stream_text(full_text, 'text', session_id):
+                            yield chunk
+                        sse_event = {
+                            'type': 'done',
+                            'content': full_text,
+                            'tools': tool_events,
+                            'fallback': 'default',
+                            'session_id': session_id
+                        }
+                        yield f"data: {json.dumps(sse_event, ensure_ascii=False)}\n\n"
+                        session_manager.add_message(session_id, 'user', message)
+                        session_manager.add_message(session_id, 'assistant', full_text)
+            else:
+                sse_event = {
+                    'type': 'done',
+                    'content': full_text,
+                    'tools': tool_events,
+                    'session_id': session_id
+                }
+                yield f"data: {json.dumps(sse_event, ensure_ascii=False)}\n\n"
+
+                session_manager.add_message(session_id, 'user', message)
+                session_manager.add_message(session_id, 'assistant', full_text)
+
+    except Exception as e:
+        sse_event = {
+            'type': 'error',
+            'content': str(e),
+            'session_id': session_id
+        }
+        yield f"data: {json.dumps(sse_event, ensure_ascii=False)}\n\n"
+
+    yield "data: [DONE]\n\n"
+
+
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     """
@@ -817,37 +1274,37 @@ async def chat(request: ChatRequest):
     full_message = build_context(history, request.message)
 
     # 构建命令
-    model_arg = f'--model {current_model}' if current_model else ''
-    ps_command = (
-        f'[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; '
-        f'Set-Location -LiteralPath "{work_dir}"; '
-        f'opencode run "{full_message}" --format default --no-replay {model_arg}'
-    )
+    full_message = build_context(history, request.message)
 
     try:
-        result = subprocess.run(
-            ['powershell', '-Command', ps_command],
-            capture_output=True,
-            text=False,
-            timeout=120
+        output, stderr, returncode = _run_opencode_capture(
+            full_message,
+            current_model,
+            work_dir,
+            'json',
         )
 
-        if result.returncode != 0:
-            stderr = result.stderr.decode('utf-8', errors='replace')
+        if returncode != 0:
             raise HTTPException(status_code=500, detail=f"对话失败: {stderr}")
 
-        output = result.stdout.decode('utf-8', errors='replace')
-        output = strip_ansi(output).strip()
+        response_text, reasoning_text, events, tools = _parse_opencode_json_output(output)
+        fallback = None
+
+        if not response_text.strip() and not reasoning_text.strip() and not tools:
+            fallback_output, fallback_stderr, fallback_code = _run_opencode_capture(
+                full_message,
+                current_model,
+                work_dir,
+                'default',
+            )
+            if fallback_code != 0:
+                raise HTTPException(status_code=500, detail=f"瀵硅瘽澶辫触: {fallback_stderr}")
+            response_text = _parse_opencode_default_output(fallback_output)
+            fallback = 'default'
+            if not response_text.strip():
+                raise HTTPException(status_code=502, detail="opencode produced no displayable response.")
 
         # 清理输出
-        lines = output.split('\n')
-        cleaned_lines = []
-        for line in lines:
-            line = line.strip()
-            if line and not line.startswith('>') and not line.startswith('build'):
-                cleaned_lines.append(line)
-
-        response_text = '\n'.join(cleaned_lines)
 
         # 保存到历史记录
         session_manager.add_message(session_id, 'user', request.message)
@@ -856,6 +1313,10 @@ async def chat(request: ChatRequest):
         return {
             "session_id": session_id,
             "response": response_text,
+            "reasoning": reasoning_text,
+            "events": events,
+            "tools": tools,
+            "fallback": fallback,
             "model": current_model,
             "message_count": len(session_manager.get_session(session_id)['history'])
         }
