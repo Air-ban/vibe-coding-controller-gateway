@@ -1,0 +1,82 @@
+{
+  "generated_at": "2026-06-10T03:59:04",
+  "duration_seconds": 1.002,
+  "status": "passed",
+  "python": "3.12.0 (tags/v3.12.0:0fb18b0, Oct  2 2023, 13:03:39) [MSC v.1935 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "counts": {
+    "total": 11,
+    "passed": 11,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "tests": [
+    {
+      "name": "test_claude_chat_persists_provider_session_and_uses_resume (test_api_gateway.ApiGatewayTestCase.test_claude_chat_persists_provider_session_and_uses_resume)",
+      "status": "passed",
+      "duration_seconds": 0.0174,
+      "message": ""
+    },
+    {
+      "name": "test_claude_chat_returns_tool_events (test_api_gateway.ApiGatewayTestCase.test_claude_chat_returns_tool_events)",
+      "status": "passed",
+      "duration_seconds": 0.0055,
+      "message": ""
+    },
+    {
+      "name": "test_claude_models_endpoint_returns_aliases (test_api_gateway.ApiGatewayTestCase.test_claude_models_endpoint_returns_aliases)",
+      "status": "passed",
+      "duration_seconds": 0.0038,
+      "message": ""
+    },
+    {
+      "name": "test_claude_permission_events_are_returned_and_streamed (test_api_gateway.ApiGatewayTestCase.test_claude_permission_events_are_returned_and_streamed)",
+      "status": "passed",
+      "duration_seconds": 0.808,
+      "message": ""
+    },
+    {
+      "name": "test_claude_permission_mode_in_system_event_is_not_permission_request (test_api_gateway.ApiGatewayTestCase.test_claude_permission_mode_in_system_event_is_not_permission_request)",
+      "status": "passed",
+      "duration_seconds": 0.0053,
+      "message": ""
+    },
+    {
+      "name": "test_claude_stream_returns_text_and_done_events (test_api_gateway.ApiGatewayTestCase.test_claude_stream_returns_text_and_done_events)",
+      "status": "passed",
+      "duration_seconds": 0.1354,
+      "message": ""
+    },
+    {
+      "name": "test_create_claude_session_and_get_details (test_api_gateway.ApiGatewayTestCase.test_create_claude_session_and_get_details)",
+      "status": "passed",
+      "duration_seconds": 0.0066,
+      "message": ""
+    },
+    {
+      "name": "test_history_can_be_read_and_cleared (test_api_gateway.ApiGatewayTestCase.test_history_can_be_read_and_cleared)",
+      "status": "passed",
+      "duration_seconds": 0.0099,
+      "message": ""
+    },
+    {
+      "name": "test_opencode_error_event_is_exposed_as_gateway_error (test_api_gateway.ApiGatewayTestCase.test_opencode_error_event_is_exposed_as_gateway_error)",
+      "status": "passed",
+      "duration_seconds": 0.0033,
+      "message": ""
+    },
+    {
+      "name": "test_root_exposes_supported_providers (test_api_gateway.ApiGatewayTestCase.test_root_exposes_supported_providers)",
+      "status": "passed",
+      "duration_seconds": 0.0029,
+      "message": ""
+    },
+    {
+      "name": "test_version_reports_opencode_and_claude_versions (test_api_gateway.ApiGatewayTestCase.test_version_reports_opencode_and_claude_versions)",
+      "status": "passed",
+      "duration_seconds": 0.0035,
+      "message": ""
+    }
+  ]
+}
