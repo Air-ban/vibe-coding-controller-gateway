@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openremote"
-version = "1.0.0"
+version = "1.1.0"
 description = "Opencode API Gateway - HTTP API 网关，将 opencode CLI 封装为 RESTful 服务"
 readme = "API_README.md"
 license = {text = "MIT"}

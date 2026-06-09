@@ -1,251 +1,134 @@
-# Opencode API Gateway
+# Openremote API Gateway Quick API
 
-基于 FastAPI 的 Opencode API 网关，提供版本查询、模型管理、工作目录切换、对话等功能。
+默认 provider 是 `opencode`。要调用 Claude Code，在请求体或会话创建时传：
 
-## 功能特性
-
-- **版本查询**：查询当前 opencode 版本号
-- **模型管理**：查询可用模型列表，切换模型
-- **工作目录**：支持切换工作目录，在指定文件夹内工作
-- **对话功能**：支持非流式和 SSE 流式对话
-- **历史记录**：自动保存对话历史，支持上下文理解
-- **会话管理**：多会话支持，会话持久化
-- **局域网访问**：绑定 0.0.0.0，支持局域网内访问
-
-## 快速开始
-
-### 1. 安装依赖
-
-```bash
-pip install fastapi uvicorn requests
-```
-
-### 2. 启动服务
-
-```bash
-python opencode_api.py
-```
-
-服务将启动在 `http://0.0.0.0:8000`，支持局域网访问。
-
-### 3. 访问文档
-
-打开浏览器访问：`http://localhost:8000/docs`
-
-## API 端点
-
-### 系统信息
-
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| GET | `/` | 服务信息 |
-| GET | `/api/discover` | 局域网发现（供APP搜索） |
-| GET | `/api/version` | 查询 opencode 版本 |
-
-### 模型管理
-
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| GET | `/api/models` | 查询可用模型列表 |
-| GET | `/api/sessions/{id}/model` | 获取当前模型 |
-| POST | `/api/sessions/{id}/model` | 切换模型 |
-
-### 工作目录
-
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| GET | `/api/sessions/{id}/workdir` | 获取工作目录 |
-| POST | `/api/sessions/{id}/workdir` | 设置工作目录 |
-
-### 会话管理
-
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| POST | `/api/sessions` | 创建会话 |
-| GET | `/api/sessions` | 列出所有会话 |
-| GET | `/api/sessions/{id}` | 获取会话详情 |
-| DELETE | `/api/sessions/{id}` | 删除会话 |
-
-### 历史记录
-
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| GET | `/api/sessions/{id}/history` | 获取历史记录 |
-| DELETE | `/api/sessions/{id}/history` | 清空历史记录 |
-
-### 对话
-
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| POST | `/api/chat` | 非流式对话 |
-| POST | `/api/chat/stream` | SSE 流式对话 |
-
-## 使用示例
-
-### 1. 局域网发现（APP搜索）
-
-```bash
-curl http://localhost:8000/api/discover
-```
-
-响应：
 ```json
 {
-  "service": "opencode-api-gateway",
-  "name": "Opencode API Gateway",
-  "gateway_version": "1.0.0",
+  "provider": "claude"
+}
+```
+
+## 版本
+
+```powershell
+curl.exe http://127.0.0.1:8000/api/version
+```
+
+返回包含：
+
+```json
+{
   "opencode_version": "1.16.2",
-  "computer_name": "MyPC",
-  "port": 8000,
-  "docs_url": "/docs"
+  "claude_version": "2.1.168 (Claude Code)",
+  "gateway_version": "1.1.0",
+  "providers": ["opencode", "claude"]
 }
 ```
 
-### 2. 查询版本
+## 创建会话
 
-```bash
-curl http://localhost:8000/api/version
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/api/sessions?provider=claude"
 ```
 
-响应：
+## Claude Code 对话
+
+```powershell
+$body = @{
+  provider = "claude"
+  message = "Reply exactly: API_OK"
+  permission_mode = "bypassPermissions"
+} | ConvertTo-Json -Compress
+
+Invoke-RestMethod `
+  -Uri "http://127.0.0.1:8000/api/chat" `
+  -Method Post `
+  -ContentType "application/json; charset=utf-8" `
+  -Body $body
+```
+
+响应重点字段：
+
 ```json
 {
-  "version": "1.16.2",
-  "gateway_version": "1.0.0"
-}
-```
-
-### 3. 查询模型列表
-
-```bash
-curl http://localhost:8000/api/models
-```
-
-响应：
-```json
-{
-  "models": [
-    {"id": "opencode/big-pickle", "name": "opencode/big-pickle"},
-    {"id": "kimi-for-coding/k2p6", "name": "kimi-for-coding/k2p6"}
-  ],
-  "count": 15
-}
-```
-
-### 4. 创建会话
-
-```bash
-curl -X POST http://localhost:8000/api/sessions \
-  -H "Content-Type: application/json" \
-  -d '{"work_dir": "C:\\Users\\xxx\\Desktop"}'
-```
-
-响应：
-```json
-{
-  "session_id": "xxx",
-  "work_dir": "C:\\Users\\xxx\\Desktop",
-  "created_at": "2024-01-01T00:00:00"
-}
-```
-
-### 5. 切换模型
-
-```bash
-curl -X POST http://localhost:8000/api/sessions/xxx/model \
-  -H "Content-Type: application/json" \
-  -d '{"model": "kimi-for-coding/k2p6"}'
-```
-
-### 6. 非流式对话
-
-```bash
-curl -X POST http://localhost:8000/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{
-    "message": "你好",
-    "session_id": "xxx"
-  }'
-```
-
-响应：
-```json
-{
-  "session_id": "xxx",
-  "response": "你好！有什么我可以帮你的吗？",
-  "model": "kimi-for-coding/k2p6",
+  "session_id": "gateway-session-id",
+  "provider": "claude",
+  "provider_session_id": "claude-code-session-id",
+  "response": "API_OK",
+  "events": [],
+  "tools": [],
+  "permissions": [],
+  "error": null,
   "message_count": 2
 }
 ```
 
-### 7. SSE 流式对话
+`tools` 会包含 Claude Code 的 `tool_use` / `tool_result`。如果工具因为权限或授权问题无法执行，`permissions` 会包含对应状态，关联的工具事件会带 `requires_approval=true`。
 
-```bash
-curl -X POST http://localhost:8000/api/chat/stream \
-  -H "Content-Type: application/json" \
-  -d '{
-    "message": "请介绍Python",
-    "session_id": "xxx"
-  }'
+```json
+{
+  "tools": [
+    {
+      "event_type": "tool_result",
+      "provider": "claude",
+      "tool": "Bash",
+      "tool_call_id": "toolu_bash",
+      "status": "permission_denied",
+      "error": "Permission denied: Bash(git push) requires approval.",
+      "requires_approval": true
+    }
+  ],
+  "permissions": [
+    {
+      "event_type": "permission",
+      "provider": "claude",
+      "tool": "Bash",
+      "tool_call_id": "toolu_bash",
+      "status": "permission_denied",
+      "reason": "Permission denied: Bash(git push) requires approval."
+    }
+  ]
+}
 ```
 
-响应（SSE 事件流）：
+说明：Android 端不能直接替 Claude Code 点交互授权。真正放行工具要通过 `permission_mode`、Claude Code settings、`--allowedTools` 等 Claude Code 侧配置完成；网关只负责把“需要授权/被拒绝”的状态返回给客户端展示。
+
+后续请求只需要传网关的 `session_id`：
+
+```json
+{
+  "provider": "claude",
+  "session_id": "gateway-session-id",
+  "message": "Continue the conversation."
+}
 ```
-data: {"type": "text", "content": "Python", "session_id": "xxx"}
 
-data: {"type": "text", "content": " 是一种", "session_id": "xxx"}
+网关会使用保存的 `provider_session_id` 调用 `claude --resume`。
 
-data: {"type": "done", "content": "完整回复", "session_id": "xxx"}
+## SSE
 
+```powershell
+$body = @{
+  provider = "claude"
+  message = "Reply exactly SSE_PASS."
+  permission_mode = "bypassPermissions"
+} | ConvertTo-Json -Compress
+
+Invoke-WebRequest `
+  -Uri "http://127.0.0.1:8000/api/chat/stream" `
+  -Method Post `
+  -ContentType "application/json; charset=utf-8" `
+  -Body $body
+```
+
+事件：
+
+```text
+data: {"type":"text","content":"S","session_id":"xxx","provider":"claude"}
+data: {"type":"tool","content":"Tool Bash call","tool":"Bash","status":"requested","input":{"command":"git status"},"session_id":"xxx","provider":"claude"}
+data: {"type":"permission","content":"Permission permission_denied for Bash","tool":"Bash","status":"permission_denied","reason":"Permission denied: Bash(git push) requires approval.","session_id":"xxx","provider":"claude"}
+data: {"type":"done","content":"SSE_PASS.","session_id":"xxx","provider":"claude","provider_session_id":"...","tools":[],"permissions":[],"error":null}
 data: [DONE]
 ```
 
-### 8. 查询历史记录
-
-```bash
-curl http://localhost:8000/api/sessions/xxx/history
-```
-
-## 局域网访问
-
-服务默认绑定 `0.0.0.0:8000`，局域网内的其他设备可以通过以下地址访问：
-
-1. 获取本机 IP 地址：
-```bash
-ipconfig  # Windows
-ifconfig  # Linux/Mac
-```
-
-2. 其他设备访问：
-```
-http://你的IP地址:8000
-```
-
-例如：`http://192.168.1.100:8000`
-
-## 会话持久化
-
-会话数据自动保存到 `sessions/` 目录下的 JSON 文件中，即使重启服务也不会丢失。
-
-## 上下文管理
-
-对话自动保留最近 10 条消息作为上下文，支持多轮对话和上下文理解。
-
-## 测试
-
-```bash
-python test_api_simple.py
-```
-
-## 文件说明
-
-- `opencode_api.py` - FastAPI 主应用
-- `test_api_simple.py` - API 测试脚本
-- `sessions/` - 会话数据存储目录
-
-## 注意事项
-
-1. 确保 opencode 已安装并在 PATH 中
-2. Windows 系统下使用 PowerShell 执行命令
-3. 服务启动后会自动创建 `sessions/` 目录
-4. 默认端口为 8000，可通过修改代码更改
+完整文档见 `API文档.md`。
